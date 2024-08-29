@@ -1,0 +1,429 @@
+/********************************************************************
+
+ This benchmark test program is measuring a cpu performance
+ of floating point operation by a Poisson equation solver.
+
+ If you have any question, please ask me via email.
+ written by Ryutaro HIMENO, November 26, 2001.
+ Version 3.0
+ ----------------------------------------------
+ Ryutaro Himeno, Dr. of Eng.
+ Head of Computer Information Division,
+ RIKEN (The Institute of Pysical and Chemical Research)
+ Email : himeno@postman.riken.go.jp
+ ---------------------------------------------------------------
+ You can adjust the size of this benchmark code to fit your target
+ computer. In that case, please chose following sets of
+ (mimax,mjmax,mkmax):
+ small : 33,33,65
+ small : 65,65,129
+ midium: 129,129,257
+ large : 257,257,513
+ ext.large: 513,513,1025
+ This program is to measure a computer performance in MFLOPS
+ by using a kernel which appears in a linear solver of pressure
+ Poisson eq. which appears in an incompressible Navier-Stokes solver.
+ A point-Jacobi method is employed in this solver as this method can 
+ be easyly vectrized and be parallelized.
+ ------------------
+ Finite-difference method, curvilinear coodinate system
+ Vectorizable and parallelizable on each grid point
+ No. of grid points : imax x jmax x kmax including boundaries
+ ------------------
+ A,B,C:coefficient matrix, wrk1: source term of Poisson equation
+ wrk2 : working area, OMEGA : relaxation parameter
+ BND:control variable for boundaries and objects ( = 0 or 1)
+ P: pressure
+********************************************************************/
+
+#include <stdio.h>
+
+#include <hip/hip_runtime.h>
+
+#ifdef SSMALL
+#define MIMAX            33
+#define MJMAX            33
+#define MKMAX            65
+#endif
+
+#ifdef SMALL
+#define MIMAX            65
+#define MJMAX            65
+#define MKMAX            129
+#endif
+
+#ifdef MIDDLE
+#define MIMAX            129
+#define MJMAX            129
+#define MKMAX            257
+#endif
+
+#ifdef LARGE
+#define MIMAX            257
+#define MJMAX            257
+#define MKMAX            513
+#endif
+
+#ifdef ELARGE
+#define MIMAX            513
+#define MJMAX            513
+#define MKMAX            1025
+#endif
+
+double second();
+float jacobi(int);
+void initmt();
+double fflop(int,int,int);
+double mflops(int,double,double);
+
+static float  p[MIMAX][MJMAX][MKMAX];
+static float  a[4][MIMAX][MJMAX][MKMAX],
+              b[3][MIMAX][MJMAX][MKMAX],
+              c[3][MIMAX][MJMAX][MKMAX];
+static float  bnd[MIMAX][MJMAX][MKMAX];
+static float  wrk1[MIMAX][MJMAX][MKMAX],
+              wrk2[MIMAX][MJMAX][MKMAX];
+
+static int imax, jmax, kmax;
+static float omega;
+
+static float *d_p;
+static float *d_a;
+static float *d_b;
+static float *d_c;
+static float *d_bnd;
+static float *d_wrk1;
+static float *d_wrk2;
+static size_t d_pitch;
+static float *d_gosa;
+
+int
+main()
+{
+  int    nn;
+  float  gosa;
+  double cpu,cpu0,cpu1,flop,target;
+
+  target= 60.0;
+  omega= 0.8;
+  imax = MIMAX-1;
+  jmax = MJMAX-1;
+  kmax = MKMAX-1;
+
+  /*
+   *    Initializing matrixes
+   */
+  initmt();
+  printf("mimax = %d mjmax = %d mkmax = %d\n",MIMAX, MJMAX, MKMAX);
+  printf("imax = %d jmax = %d kmax =%d\n",imax,jmax,kmax);
+
+  nn= 3;
+  printf(" Start rehearsal measurement process.\n");
+  printf(" Measure the performance in %d times.\n\n",nn);
+
+  cpu0= second();
+  gosa= jacobi(nn);
+  cpu1= second();
+  cpu= cpu1 - cpu0;
+
+  flop= fflop(imax,jmax,kmax);
+
+  printf(" MFLOPS: %f time(s): %f %e\n\n",
+         mflops(nn,cpu,flop),cpu,gosa);
+
+  nn= (int)(target/(cpu/3.0));
+
+  printf(" Now, start the actual measurement process.\n");
+  printf(" The loop will be excuted in %d times\n",nn);
+  printf(" This will take about one minute.\n");
+  printf(" Wait for a while\n\n");
+
+  /*
+   *    Start measuring
+   */
+  cpu0 = second();
+  gosa = jacobi(nn);
+  cpu1 = second();
+
+  cpu= cpu1 - cpu0;
+
+  printf(" Loop executed for %d times\n",nn);
+  printf(" Gosa : %e \n",gosa);
+  printf(" MFLOPS measured : %f\tcpu : %f\n",mflops(nn,cpu,flop),cpu);
+  printf(" Score based on Pentium III 600MHz : %f\n",
+         mflops(nn,cpu,flop)/82,84);
+
+  return (0);
+}
+
+void
+initmt()
+{
+  int i,j,k;
+
+  for(i=0 ; i<MIMAX ; i++)
+    for(j=0 ; j<MJMAX ; j++)
+      for(k=0 ; k<MKMAX ; k++){
+        a[0][i][j][k]=0.0;
+        a[1][i][j][k]=0.0;
+        a[2][i][j][k]=0.0;
+        a[3][i][j][k]=0.0;
+        b[0][i][j][k]=0.0;
+        b[1][i][j][k]=0.0;
+        b[2][i][j][k]=0.0;
+        c[0][i][j][k]=0.0;
+        c[1][i][j][k]=0.0;
+        c[2][i][j][k]=0.0;
+        p[i][j][k]=0.0;
+        wrk1[i][j][k]=0.0;
+        bnd[i][j][k]=0.0;
+      }
+
+  for(i=0 ; i<imax ; i++)
+    for(j=0 ; j<jmax ; j++)
+      for(k=0 ; k<kmax ; k++){
+        a[0][i][j][k]=1.0;
+        a[1][i][j][k]=1.0;
+        a[2][i][j][k]=1.0;
+        a[3][i][j][k]=1.0/6.0;
+        b[0][i][j][k]=0.0;
+        b[1][i][j][k]=0.0;
+        b[2][i][j][k]=0.0;
+        c[0][i][j][k]=1.0;
+        c[1][i][j][k]=1.0;
+        c[2][i][j][k]=1.0;
+        p[i][j][k]=(float)(i*i)/(float)((imax-1)*(imax-1));
+        wrk1[i][j][k]=0.0;
+        bnd[i][j][k]=1.0;
+      }
+
+  hipMallocPitch(reinterpret_cast<void **>(&d_p), &d_pitch,
+                  kmax * sizeof(float), 14 * imax * jmax);
+
+  hipMemcpy3DParms p_p = { 0 };
+  p_p.srcPtr = make_hipPitchedPtr(p, MKMAX * sizeof(float), MKMAX, MJMAX);
+  p_p.dstPtr = make_hipPitchedPtr(d_p, d_pitch, kmax, jmax);
+  p_p.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+  p_p.kind = hipMemcpyHostToDevice;
+  hipMemcpy3D(&p_p);
+
+  d_a = d_p + imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_a = { 0 };
+  for (size_t i = 0; i < 4; ++i) {
+    p_a.srcPtr = make_hipPitchedPtr(a[i], MKMAX * sizeof(float), MKMAX, MJMAX);
+    p_a.dstPtr =
+      make_hipPitchedPtr(d_a + i * imax * jmax * (d_pitch / sizeof(float)),
+                          d_pitch, kmax, jmax);
+    p_a.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+    p_a.kind = hipMemcpyHostToDevice;
+    hipMemcpy3D(&p_a);
+  }
+
+  d_b = d_a + 4 * imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_b = { 0 };
+  for (size_t i = 0; i < 3; ++i) {
+    p_b.srcPtr = make_hipPitchedPtr(b[i], MKMAX * sizeof(float), MKMAX, MJMAX);
+    p_b.dstPtr =
+      make_hipPitchedPtr(d_b + i * imax * jmax * (d_pitch / sizeof(float)),
+                          d_pitch, kmax, jmax);
+    p_b.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+    p_b.kind = hipMemcpyHostToDevice;
+    hipMemcpy3D(&p_b);
+  }
+
+  d_c = d_b + 3 * imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_c = { 0 };
+  for (size_t i = 0; i < 3; ++i) {
+    p_c.srcPtr = make_hipPitchedPtr(c[i], MKMAX * sizeof(float), MKMAX, MJMAX);
+    p_c.dstPtr =
+      make_hipPitchedPtr(d_c + i * imax * jmax * (d_pitch / sizeof(float)),
+                          d_pitch, kmax, jmax);
+    p_c.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+    p_c.kind = hipMemcpyHostToDevice;
+    hipMemcpy3D(&p_c);
+  }
+
+  d_bnd = d_c + 3 * imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_bnd = { 0 };
+  p_bnd.srcPtr = make_hipPitchedPtr(bnd, MKMAX * sizeof(float), MKMAX, MJMAX);
+  p_bnd.dstPtr = make_hipPitchedPtr(d_bnd, d_pitch, kmax, jmax);
+  p_bnd.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+  p_bnd.kind = hipMemcpyHostToDevice;
+  hipMemcpy3D(&p_bnd);
+
+  d_wrk1 = d_bnd + imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_wrk1 = { 0 };
+  p_wrk1.srcPtr =
+    make_hipPitchedPtr(wrk1, MKMAX * sizeof(float), MKMAX, MJMAX);
+  p_wrk1.dstPtr = make_hipPitchedPtr(d_wrk1, d_pitch, kmax, jmax);
+  p_wrk1.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+  p_wrk1.kind = hipMemcpyHostToDevice;
+  hipMemcpy3D(&p_wrk1);
+
+  d_wrk2 = d_wrk1 + imax * jmax * (d_pitch / sizeof(float));
+  hipMemcpy3DParms p_wrk2 = { 0 };
+  p_wrk2.srcPtr =
+    make_hipPitchedPtr(wrk2, MKMAX * sizeof(float), MKMAX, MJMAX);
+  p_wrk2.dstPtr = make_hipPitchedPtr(d_wrk2, d_pitch, kmax, jmax);
+  p_wrk2.extent = make_hipExtent(kmax * sizeof(float), jmax, imax);
+  p_wrk2.kind = hipMemcpyHostToDevice;
+  hipMemcpy3D(&p_wrk2);
+
+  hipMalloc(reinterpret_cast<void **>(&d_gosa), sizeof(float));
+}
+
+template<bool CALC_GOSA> static __global__ void
+jacobi_kernel0(float *__restrict__ p, size_t pitch, float omega, float *__restrict__ d_gosa)
+{
+  const size_t imax = MIMAX-1;
+  const size_t jmax = MJMAX-1;
+  const size_t kmax = MKMAX-1;
+  const size_t width = pitch / sizeof(float);
+  float *a = p + imax * jmax * width;
+  float *b = a + 4 * imax * jmax * width;
+  float *c = b + 3 * imax * jmax * width;
+  float *bnd = c + 3 * imax * jmax * width;
+  float *wrk1 = bnd + imax * jmax * width;
+  float *wrk2 = wrk1 + imax * jmax * width;
+
+  float gosa = 0.0f;
+
+  const size_t i = blockIdx.z * blockDim.z + threadIdx.z;
+  const size_t j = blockIdx.y * blockDim.y + threadIdx.y;
+  const size_t k = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= 1 && i < imax - 1 &&
+      j >= 1 && j < jmax - 1 &&
+      k >= 1 && k < kmax - 1) {
+    float s0 = a[((0 * imax + i) * jmax + j) * width + k] * p[((i + 1) * jmax + j) * width + k]
+             + a[((1 * imax + i) * jmax + j) * width + k] * p[(i * jmax + (j + 1)) * width + k]
+             + a[((2 * imax + i) * jmax + j) * width + k] * p[(i * jmax + j) * width + (k + 1)]
+             + b[((0 * imax + i) * jmax + j) * width + k] * (  p[((i + 1) * jmax + (j + 1)) * width + k] - p[((i + 1) * jmax + (j - 1)) * width + k]
+                                                             - p[((i - 1) * jmax + (j + 1)) * width + k] + p[((i - 1) * jmax + (j - 1)) * width + k])
+             + b[((1 * imax + i) * jmax + j) * width + k] * (  p[(i * jmax + (j + 1)) * width + (k + 1)] - p[(i * jmax + (j - 1)) * width + (k + 1)]
+                                                             - p[(i * jmax + (j + 1)) * width + (k - 1)] + p[(i * jmax + (j - 1)) * width + (k - 1)])
+             + b[((2 * imax + i) * jmax + j) * width + k] * (  p[((i + 1) * jmax + j) * width + (k + 1)] - p[((i - 1) * jmax + j) * width + (k + 1)]
+                                                             - p[((i + 1) * jmax + j) * width + (k - 1)] + p[((i - 1) * jmax + j) * width + (k - 1)])
+             + c[((0 * imax + i) * jmax + j) * width + k] * p[((i - 1) * jmax + j) * width + k]
+             + c[((1 * imax + i) * jmax + j) * width + k] * p[(i * jmax + (j - 1)) * width + k]
+             + c[((2 * imax + i) * jmax + j) * width + k] * p[(i * jmax + j) * width + (k - 1)]
+             + wrk1[(i * jmax + j) * width + k];
+
+    float ss = ( s0 * a[((3 * imax + i) * jmax + j) * width + k] - p[(i * jmax + j) * width + k]) * bnd[(i * jmax + j) * width + k];
+
+    if (CALC_GOSA) {
+      gosa+= ss*ss;
+      /* gosa= (gosa > ss*ss) ? a : b; */
+    }
+    wrk2[(i * jmax + j) * width + k] = p[(i * jmax + j) * width + k] + omega * ss;
+  }
+
+  if (CALC_GOSA) {
+    gosa += __shfl_xor(0xffffffff, gosa, 1);
+    gosa += __shfl_xor(0xffffffff, gosa, 2);
+    gosa += __shfl_xor(0xffffffff, gosa, 4);
+    gosa += __shfl_xor(0xffffffff, gosa, 8);
+    gosa += __shfl_xor(0xffffffff, gosa, 16);
+    __shared__ float shared[32];
+    unsigned int id = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
+    if (id % 32u == 0) {
+      shared[id / 32u] = gosa;
+    }
+    __syncthreads();
+    if (id < blockDim.z * blockDim.y * blockDim.x / 32u) {
+      gosa = shared[id];
+    } else {
+      gosa = 0.0f;
+    }
+    __syncthreads();
+    gosa += __shfl_xor(0xffffffff, gosa, 1);
+    gosa += __shfl_xor(0xffffffff, gosa, 2);
+    gosa += __shfl_xor(0xffffffff, gosa, 4);
+    gosa += __shfl_xor(0xffffffff, gosa, 8);
+    gosa += __shfl_xor(0xffffffff, gosa, 16);
+    if (id == 0) {
+      atomicAdd(d_gosa, gosa);
+    }
+  }
+}
+
+static __global__ void
+jacobi_kernel1(float *__restrict__ p, size_t pitch)
+{
+  const size_t imax = MIMAX-1;
+  const size_t jmax = MJMAX-1;
+  const size_t kmax = MKMAX-1;
+  const size_t width = pitch / sizeof(float);
+  float *wrk2 = p + 13 * imax * jmax * width;
+
+  const size_t i = blockIdx.z * blockDim.z + threadIdx.z;
+  const size_t j = blockIdx.y * blockDim.y + threadIdx.y;
+  const size_t k = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= 1 && i < imax - 1 &&
+      j >= 1 && j < jmax - 1 &&
+      k >= 1 && k < kmax - 1) {
+    p[(i * jmax + j) * width + k] = wrk2[(i * jmax + j) * width + k];
+  }
+}
+
+float
+jacobi(int nn)
+{
+  int n;
+  float gosa;
+
+  dim3 block(64, 4, 2);
+  dim3 grid((kmax + block.x - 1) / block.x,
+            (jmax + block.y - 1) / block.y,
+            (imax + block.z - 1) / block.z);
+  for(n=0 ; n<nn ; ++n){
+    if (n + 1 == nn) {
+      hipMemset(d_gosa, 0, sizeof(float));
+      jacobi_kernel0<true><<<grid, block>>>(d_p, d_pitch, omega, d_gosa);
+      hipMemcpy(&gosa, d_gosa, sizeof(float), hipMemcpyDeviceToHost);
+    } else {
+      jacobi_kernel0<false><<<grid, block>>>(d_p, d_pitch, omega, 0);
+    }
+
+    jacobi_kernel1<<<grid, block>>>(d_p, d_pitch);
+  } /* end n loop */
+  hipDeviceSynchronize();
+
+  return(gosa);
+}
+
+double
+fflop(int mx,int my, int mz)
+{
+  return((double)(mz-2)*(double)(my-2)*(double)(mx-2)*34.0);
+}
+
+double
+mflops(int nn,double cpu,double flop)
+{
+  return(flop/cpu*1.e-6*(double)nn);
+}
+
+#include <sys/time.h>
+double
+second()
+{
+
+  struct timeval tm;
+  double t ;
+
+  static int base_sec = 0,base_usec = 0;
+
+  gettimeofday(&tm, NULL);
+
+  if(base_sec == 0 && base_usec == 0)
+    {
+      base_sec = tm.tv_sec;
+      base_usec = tm.tv_usec;
+      t = 0.0;
+  } else {
+    t = (double) (tm.tv_sec-base_sec) + 
+      ((double) (tm.tv_usec-base_usec))/1.0e6 ;
+  }
+
+  return t ;
+}
