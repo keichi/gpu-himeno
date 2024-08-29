@@ -85,22 +85,20 @@ static float  wrk1[MIMAX][MJMAX][MKMAX],
 static int imax, jmax, kmax;
 static float omega;
 
-static cudaArray_t a_p;
+static float *d_p;
 static float *d_a;
 static float *d_b;
 static float *d_c;
 static float *d_bnd;
 static float *d_wrk1;
+static float *d_wrk2;
 static size_t d_pitch;
-static cudaArray_t a_wrk2;
 static float *d_gosa;
-
-cudaSurfaceObject_t t_p, t_wrk2;
 
 int
 main()
 {
-  int    i,j,k,nn;
+  int    nn;
   float  gosa;
   double cpu,cpu0,cpu1,flop,target;
 
@@ -196,18 +194,18 @@ initmt()
         wrk1[i][j][k]=0.0;
         bnd[i][j][k]=1.0;
       }
-  cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float>();
-  cudaMalloc3DArray(&a_p, &channelDesc,
-                    make_cudaExtent(kmax, jmax, imax),
-                    cudaArraySurfaceLoadStore);
+
+  cudaMallocPitch(reinterpret_cast<void **>(&d_p), &d_pitch,
+                  kmax * sizeof(float), 14 * imax * jmax);
+
   cudaMemcpy3DParms p_p = { 0 };
   p_p.srcPtr = make_cudaPitchedPtr(p, MKMAX * sizeof(float), MKMAX, MJMAX);
-  p_p.dstArray = a_p;
-  p_p.extent = make_cudaExtent(kmax, jmax, imax);
+  p_p.dstPtr = make_cudaPitchedPtr(d_p, d_pitch, kmax, jmax);
+  p_p.extent = make_cudaExtent(kmax * sizeof(float), jmax, imax);
   p_p.kind = cudaMemcpyHostToDevice;
   cudaMemcpy3D(&p_p);
-  cudaMallocPitch(reinterpret_cast<void **>(&d_a), &d_pitch,
-                  kmax * sizeof(float), 12 * imax * jmax);
+
+  d_a = d_p + imax * jmax * (d_pitch / sizeof(float));
   cudaMemcpy3DParms p_a = { 0 };
   for (size_t i = 0; i < 4; ++i) {
     p_a.srcPtr = make_cudaPitchedPtr(a[i], MKMAX * sizeof(float), MKMAX, MJMAX);
@@ -218,6 +216,7 @@ initmt()
     p_a.kind = cudaMemcpyHostToDevice;
     cudaMemcpy3D(&p_a);
   }
+
   d_b = d_a + 4 * imax * jmax * (d_pitch / sizeof(float));
   cudaMemcpy3DParms p_b = { 0 };
   for (size_t i = 0; i < 3; ++i) {
@@ -229,6 +228,7 @@ initmt()
     p_b.kind = cudaMemcpyHostToDevice;
     cudaMemcpy3D(&p_b);
   }
+
   d_c = d_b + 3 * imax * jmax * (d_pitch / sizeof(float));
   cudaMemcpy3DParms p_c = { 0 };
   for (size_t i = 0; i < 3; ++i) {
@@ -240,6 +240,7 @@ initmt()
     p_c.kind = cudaMemcpyHostToDevice;
     cudaMemcpy3D(&p_c);
   }
+
   d_bnd = d_c + 3 * imax * jmax * (d_pitch / sizeof(float));
   cudaMemcpy3DParms p_bnd = { 0 };
   p_bnd.srcPtr = make_cudaPitchedPtr(bnd, MKMAX * sizeof(float), MKMAX, MJMAX);
@@ -247,6 +248,7 @@ initmt()
   p_bnd.extent = make_cudaExtent(kmax * sizeof(float), jmax, imax);
   p_bnd.kind = cudaMemcpyHostToDevice;
   cudaMemcpy3D(&p_bnd);
+
   d_wrk1 = d_bnd + imax * jmax * (d_pitch / sizeof(float));
   cudaMemcpy3DParms p_wrk1 = { 0 };
   p_wrk1.srcPtr =
@@ -255,32 +257,32 @@ initmt()
   p_wrk1.extent = make_cudaExtent(kmax * sizeof(float), jmax, imax);
   p_wrk1.kind = cudaMemcpyHostToDevice;
   cudaMemcpy3D(&p_wrk1);
-  cudaMalloc3DArray(&a_wrk2, &channelDesc,
-                    make_cudaExtent(kmax, jmax, imax),
-                    cudaArraySurfaceLoadStore);
+
+  d_wrk2 = d_wrk1 + imax * jmax * (d_pitch / sizeof(float));
+  cudaMemcpy3DParms p_wrk2 = { 0 };
+  p_wrk2.srcPtr =
+    make_cudaPitchedPtr(wrk2, MKMAX * sizeof(float), MKMAX, MJMAX);
+  p_wrk2.dstPtr = make_cudaPitchedPtr(d_wrk2, d_pitch, kmax, jmax);
+  p_wrk2.extent = make_cudaExtent(kmax * sizeof(float), jmax, imax);
+  p_wrk2.kind = cudaMemcpyHostToDevice;
+  cudaMemcpy3D(&p_wrk2);
+
   cudaMalloc(reinterpret_cast<void **>(&d_gosa), sizeof(float));
-  cudaResourceDesc r_p;
-  r_p.resType = cudaResourceTypeArray;
-  r_p.res.array.array = a_p;
-  cudaResourceDesc r_wrk2;
-  r_wrk2.resType = cudaResourceTypeArray;
-  r_wrk2.res.array.array = a_wrk2;
-  cudaCreateSurfaceObject(&t_p, &r_p);
-  cudaCreateSurfaceObject(&t_wrk2, &r_wrk2);
 }
 
 template<bool CALC_GOSA> static __global__ void
-jacobi_kernel0(cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src,
-const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_gosa)
+jacobi_kernel0(float *__restrict__ p, size_t pitch, float omega, float *__restrict__ d_gosa)
 {
   const size_t imax = MIMAX-1;
   const size_t jmax = MJMAX-1;
   const size_t kmax = MKMAX-1;
   const size_t width = pitch / sizeof(float);
-  const float *b = a + 4 * imax * jmax * width; 
-  const float *c = b + 3 * imax * jmax * width; 
-  const float *bnd = c + 3 * imax * jmax * width; 
-  const float *wrk1 = bnd + imax * jmax * width; 
+  float *a = p + imax * jmax * width;
+  float *b = a + 4 * imax * jmax * width;
+  float *c = b + 3 * imax * jmax * width;
+  float *bnd = c + 3 * imax * jmax * width;
+  float *wrk1 = bnd + imax * jmax * width;
+  float *wrk2 = wrk1 + imax * jmax * width;
 
   float gosa = 0.0f;
 
@@ -290,28 +292,27 @@ const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_go
   if (i >= 1 && i < imax - 1 &&
       j >= 1 && j < jmax - 1 &&
       k >= 1 && k < kmax - 1) {
-    float s0 = a[((0 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k  ) * sizeof(float), j  , i+1)
-             + a[((1 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k  ) * sizeof(float), j+1, i  )
-             + a[((2 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k+1) * sizeof(float), j  , i  )
-             + b[((0 * imax + i) * jmax + j) * width + k] * ( surf3Dread<float>(t_src, (k  ) * sizeof(float), j+1, i+1) - surf3Dread<float>(t_src, (k  ) * sizeof(float), j-1, i+1)
-                              - surf3Dread<float>(t_src, (k  ) * sizeof(float), j+1, i-1) + surf3Dread<float>(t_src, (k  ) * sizeof(float), j-1, i-1) )
-             + b[((1 * imax + i) * jmax + j) * width + k] * ( surf3Dread<float>(t_src, (k+1) * sizeof(float), j+1, i  ) - surf3Dread<float>(t_src, (k+1) * sizeof(float), j-1, i  )
-                               - surf3Dread<float>(t_src, (k-1) * sizeof(float), j+1, i  ) + surf3Dread<float>(t_src, (k-1) * sizeof(float), j-1, i  ) )
-             + b[((2 * imax + i) * jmax + j) * width + k] * ( surf3Dread<float>(t_src, (k+1) * sizeof(float), j  , i+1) - surf3Dread<float>(t_src, (k+1) * sizeof(float), j  , i-1)
-                               - surf3Dread<float>(t_src, (k-1) * sizeof(float), j  , i+1) + surf3Dread<float>(t_src, (k-1) * sizeof(float), j  , i-1) )
-             + c[((0 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k  ) * sizeof(float), j  , i-1)
-             + c[((1 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k  ) * sizeof(float), j-1, i  )
-             + c[((2 * imax + i) * jmax + j) * width + k] * surf3Dread<float>(t_src, (k-1) * sizeof(float), j  , i  )
+    float s0 = a[((0 * imax + i) * jmax + j) * width + k] * p[((i + 1) * jmax + j) * width + k]
+             + a[((1 * imax + i) * jmax + j) * width + k] * p[(i * jmax + (j + 1)) * width + k]
+             + a[((2 * imax + i) * jmax + j) * width + k] * p[(i * jmax + j) * width + (k + 1)]
+             + b[((0 * imax + i) * jmax + j) * width + k] * (  p[((i + 1) * jmax + (j + 1)) * width + k] - p[((i + 1) * jmax + (j - 1)) * width + k]
+                                                             - p[((i - 1) * jmax + (j + 1)) * width + k] + p[((i - 1) * jmax + (j - 1)) * width + k])
+             + b[((1 * imax + i) * jmax + j) * width + k] * (  p[(i * jmax + (j + 1)) * width + (k + 1)] - p[(i * jmax + (j - 1)) * width + (k + 1)]
+                                                             - p[(i * jmax + (j + 1)) * width + (k - 1)] + p[(i * jmax + (j - 1)) * width + (k - 1)])
+             + b[((2 * imax + i) * jmax + j) * width + k] * (  p[((i + 1) * jmax + j) * width + (k + 1)] - p[((i - 1) * jmax + j) * width + (k + 1)]
+                                                             - p[((i + 1) * jmax + j) * width + (k - 1)] + p[((i - 1) * jmax + j) * width + (k - 1)])
+             + c[((0 * imax + i) * jmax + j) * width + k] * p[((i - 1) * jmax + j) * width + k]
+             + c[((1 * imax + i) * jmax + j) * width + k] * p[(i * jmax + (j - 1)) * width + k]
+             + c[((2 * imax + i) * jmax + j) * width + k] * p[(i * jmax + j) * width + (k - 1)]
              + wrk1[(i * jmax + j) * width + k];
 
-    float ss = ( s0 * a[((3 * imax + i) * jmax + j) * width + k] - surf3Dread<float>(t_src, (k) * sizeof(float), j, i) ) * bnd[(i * jmax + j) * width + k];
+    float ss = ( s0 * a[((3 * imax + i) * jmax + j) * width + k] - p[(i * jmax + j) * width + k]) * bnd[(i * jmax + j) * width + k];
 
     if (CALC_GOSA) {
       gosa+= ss*ss;
       /* gosa= (gosa > ss*ss) ? a : b; */
     }
-
-    surf3Dwrite(surf3Dread<float>(t_src, k * sizeof(float), j, i) + omega * ss, t_dst, k * sizeof(float), j, i);
+    wrk2[(i * jmax + j) * width + k] = p[(i * jmax + j) * width + k] + omega * ss;
   }
 
   if (CALC_GOSA) {
@@ -344,12 +345,13 @@ const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_go
 }
 
 static __global__ void
-jacobi_kernel1(cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src
-)
+jacobi_kernel1(float *__restrict__ p, size_t pitch)
 {
   const size_t imax = MIMAX-1;
   const size_t jmax = MJMAX-1;
   const size_t kmax = MKMAX-1;
+  const size_t width = pitch / sizeof(float);
+  float *wrk2 = p + 13 * imax * jmax * width;
 
   const size_t i = blockIdx.z * blockDim.z + threadIdx.z;
   const size_t j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -357,15 +359,15 @@ jacobi_kernel1(cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src
   if (i >= 1 && i < imax - 1 &&
       j >= 1 && j < jmax - 1 &&
       k >= 1 && k < kmax - 1) {
-    surf3Dwrite(surf3Dread<float>(t_src, k * sizeof(float), j, i), t_dst, k * sizeof(float), j, i);
+    p[(i * jmax + j) * width + k] = wrk2[(i * jmax + j) * width + k];
   }
 }
 
 float
 jacobi(int nn)
 {
-  int i,j,k,n;
-  float gosa, s0, ss;
+  int n;
+  float gosa;
 
   dim3 block(64, 4, 2);
   dim3 grid((kmax + block.x - 1) / block.x,
@@ -374,13 +376,13 @@ jacobi(int nn)
   for(n=0 ; n<nn ; ++n){
     if (n + 1 == nn) {
       cudaMemset(d_gosa, 0, sizeof(float));
-      jacobi_kernel0<true><<<grid, block>>>(t_wrk2, t_p, d_a, d_pitch, omega, d_gosa);
+      jacobi_kernel0<true><<<grid, block>>>(d_p, d_pitch, omega, d_gosa);
       cudaMemcpy(&gosa, d_gosa, sizeof(float), cudaMemcpyDeviceToHost);
     } else {
-      jacobi_kernel0<false><<<grid, block>>>(t_wrk2, t_p, d_a, d_pitch, omega, 0);
+      jacobi_kernel0<false><<<grid, block>>>(d_p, d_pitch, omega, 0);
     }
 
-    jacobi_kernel1<<<grid, block>>>(t_p, t_wrk2);
+    jacobi_kernel1<<<grid, block>>>(d_p, d_pitch);
   } /* end n loop */
   cudaDeviceSynchronize();
 
