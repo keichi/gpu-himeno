@@ -95,11 +95,7 @@ static size_t d_pitch;
 static cudaArray_t a_wrk2;
 static float *d_gosa;
 
-#ifdef BINDLESS
 cudaSurfaceObject_t t_p, t_wrk2;
-#else
-surface<void, cudaSurfaceType3D> t_src, t_dst;
-#endif
 
 int
 main()
@@ -131,7 +127,7 @@ main()
   cpu= cpu1 - cpu0;
 
   flop= fflop(imax,jmax,kmax);
-  
+
   printf(" MFLOPS: %f time(s): %f %e\n\n",
          mflops(nn,cpu,flop),cpu,gosa);
 
@@ -150,20 +146,20 @@ main()
   cpu1 = second();
 
   cpu= cpu1 - cpu0;
-  
+
   printf(" Loop executed for %d times\n",nn);
   printf(" Gosa : %e \n",gosa);
   printf(" MFLOPS measured : %f\tcpu : %f\n",mflops(nn,cpu,flop),cpu);
   printf(" Score based on Pentium III 600MHz : %f\n",
          mflops(nn,cpu,flop)/82,84);
-  
+
   return (0);
 }
 
 void
 initmt()
 {
-	int i,j,k;
+  int i,j,k;
 
   for(i=0 ; i<MIMAX ; i++)
     for(j=0 ; j<MJMAX ; j++)
@@ -263,7 +259,6 @@ initmt()
                     make_cudaExtent(kmax, jmax, imax),
                     cudaArraySurfaceLoadStore);
   cudaMalloc(reinterpret_cast<void **>(&d_gosa), sizeof(float));
-#ifdef BINDLESS
   cudaResourceDesc r_p;
   r_p.resType = cudaResourceTypeArray;
   r_p.res.array.array = a_p;
@@ -272,14 +267,10 @@ initmt()
   r_wrk2.res.array.array = a_wrk2;
   cudaCreateSurfaceObject(&t_p, &r_p);
   cudaCreateSurfaceObject(&t_wrk2, &r_wrk2);
-#endif
 }
 
 template<bool CALC_GOSA> static __global__ void
-jacobi_kernel0(
-#ifdef BINDLESS
-               cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src,
-#endif
+jacobi_kernel0(cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src,
 const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_gosa)
 {
   const size_t imax = MIMAX-1;
@@ -353,10 +344,7 @@ const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_go
 }
 
 static __global__ void
-jacobi_kernel1(
-#ifdef BINDLESS
-               cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src
-#endif
+jacobi_kernel1(cudaSurfaceObject_t t_dst, cudaSurfaceObject_t t_src
 )
 {
   const size_t imax = MIMAX-1;
@@ -384,35 +372,15 @@ jacobi(int nn)
             (jmax + block.y - 1) / block.y,
             (imax + block.z - 1) / block.z);
   for(n=0 ; n<nn ; ++n){
-#ifndef BINDLESS
-    cudaBindSurfaceToArray(t_src, a_p);
-    cudaBindSurfaceToArray(t_dst, a_wrk2);
-#endif
     if (n + 1 == nn) {
       cudaMemset(d_gosa, 0, sizeof(float));
-      jacobi_kernel0<true><<<grid, block>>>(
-#ifdef BINDLESS
-                                            t_wrk2, t_p,
-#endif
-                                            d_a, d_pitch, omega, d_gosa);
+      jacobi_kernel0<true><<<grid, block>>>(t_wrk2, t_p, d_a, d_pitch, omega, d_gosa);
       cudaMemcpy(&gosa, d_gosa, sizeof(float), cudaMemcpyDeviceToHost);
     } else {
-      jacobi_kernel0<false><<<grid, block>>>(
-#ifdef BINDLESS
-                                            t_wrk2, t_p,
-#endif
-                                             d_a, d_pitch, omega, 0);
+      jacobi_kernel0<false><<<grid, block>>>(t_wrk2, t_p, d_a, d_pitch, omega, 0);
     }
 
-#ifndef BINDLESS
-    cudaBindSurfaceToArray(t_src, a_wrk2);
-    cudaBindSurfaceToArray(t_dst, a_p);
-#endif
-    jacobi_kernel1<<<grid, block>>>(
-#ifdef BINDLESS
-                                            t_p, t_wrk2
-#endif
-                                    );
+    jacobi_kernel1<<<grid, block>>>(t_p, t_wrk2);
   } /* end n loop */
   cudaDeviceSynchronize();
 
@@ -442,7 +410,7 @@ second()
   static int base_sec = 0,base_usec = 0;
 
   gettimeofday(&tm, NULL);
-  
+
   if(base_sec == 0 && base_usec == 0)
     {
       base_sec = tm.tv_sec;
