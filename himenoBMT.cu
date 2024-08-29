@@ -315,11 +315,11 @@ const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_go
   }
 
   if (CALC_GOSA) {
-    gosa += __shfl_xor(gosa, 1);
-    gosa += __shfl_xor(gosa, 2);
-    gosa += __shfl_xor(gosa, 4);
-    gosa += __shfl_xor(gosa, 8);
-    gosa += __shfl_xor(gosa, 16);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 1);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 2);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 4);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 8);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 16);
     __shared__ float shared[32];
     unsigned int id = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
     if (id % 32u == 0) {
@@ -332,11 +332,11 @@ const float *__restrict__ a, size_t pitch, float omega, float *__restrict__ d_go
       gosa = 0.0f;
     }
     __syncthreads();
-    gosa += __shfl_xor(gosa, 1);
-    gosa += __shfl_xor(gosa, 2);
-    gosa += __shfl_xor(gosa, 4);
-    gosa += __shfl_xor(gosa, 8);
-    gosa += __shfl_xor(gosa, 16);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 1);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 2);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 4);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 8);
+    gosa += __shfl_xor_sync(0xffffffff, gosa, 16);
     if (id == 0) {
       atomicAdd(d_gosa, gosa);
     }
