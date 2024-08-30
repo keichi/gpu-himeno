@@ -1,4 +1,4 @@
-/********************************************************************
+﻿/********************************************************************
 
  This benchmark test program is measuring a cpu performance
  of floating point operation by a Poisson equation solver.
@@ -37,6 +37,7 @@
 ********************************************************************/
 
 #include <stdio.h>
+#include <sys/time.h>
 
 #ifdef SSMALL
 #define MIMAX            33
@@ -69,7 +70,7 @@
 #endif
 
 double second();
-float jacobi();
+float jacobi(int nn);
 void initmt();
 double fflop(int,int,int);
 double mflops(int,double,double);
@@ -88,7 +89,7 @@ static float omega;
 int
 main()
 {
-  int    i,j,k,nn;
+  int    nn;
   float  gosa;
   double cpu,cpu0,cpu1,flop,target;
 
@@ -261,8 +262,6 @@ mflops(int nn,double cpu,double flop)
 double
 second()
 {
-#include <sys/time.h>
-
   struct timeval tm;
   double t ;
 
