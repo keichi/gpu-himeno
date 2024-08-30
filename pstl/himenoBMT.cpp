@@ -77,13 +77,13 @@
 
 namespace stdex = std::experimental;
 
-void initmt(stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> p,
-            stdex::mdspan<float, stdex::extents<size_t, 4, MIMAX, MJMAX, MKMAX>> a,
-            stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> b,
-            stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> c,
-            stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> bnd,
-            stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk1,
-            stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk2)
+void initmt(stdex::mdspan<float, stdex::dextents<size_t, 3>> p,
+            stdex::mdspan<float, stdex::dextents<size_t, 4>> a,
+            stdex::mdspan<float, stdex::dextents<size_t, 4>> b,
+            stdex::mdspan<float, stdex::dextents<size_t, 4>> c,
+            stdex::mdspan<float, stdex::dextents<size_t, 3>> bnd,
+            stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk1,
+            stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk2)
 {
     auto r1 = std::views::iota(0, MIMAX * MJMAX * MKMAX);
     std::for_each(std::execution::par_unseq, r1.begin(), r1.end(), [=](int ijk) {
@@ -131,13 +131,13 @@ void initmt(stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> p,
 }
 
 float jacobi(int nn,
-             stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> p,
-             stdex::mdspan<float, stdex::extents<size_t, 4, MIMAX, MJMAX, MKMAX>> a,
-             stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> b,
-             stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> c,
-             stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> bnd,
-             stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk1,
-             stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk2)
+             stdex::mdspan<float, stdex::dextents<size_t, 3>> p,
+             stdex::mdspan<float, stdex::dextents<size_t, 4>> a,
+             stdex::mdspan<float, stdex::dextents<size_t, 4>> b,
+             stdex::mdspan<float, stdex::dextents<size_t, 4>> c,
+             stdex::mdspan<float, stdex::dextents<size_t, 3>> bnd,
+             stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk1,
+             stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk2)
 {
     float gosa;
     float omega = 0.8f;
@@ -232,13 +232,13 @@ int main(int argc, char *argv[])
     std::vector<float> wrk1_v(MIMAX * MJMAX * MKMAX);
     std::vector<float> wrk2_v(MIMAX * MJMAX * MKMAX);
 
-    stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> p(p_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, 4, MIMAX, MJMAX, MKMAX>> a(a_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> b(b_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, 3, MIMAX, MJMAX, MKMAX>> c(c_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> bnd(bnd_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk1(wrk1_v.data());
-    stdex::mdspan<float, stdex::extents<size_t, MIMAX, MJMAX, MKMAX>> wrk2(wrk2_v.data());
+    stdex::mdspan<float, stdex::dextents<size_t, 3>> p(p_v.data(), MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 4>> a(a_v.data(), 4, MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 4>> b(b_v.data(), 3, MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 4>> c(c_v.data(), 3, MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 3>> bnd(bnd_v.data(), MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk1(wrk1_v.data(), MIMAX, MJMAX, MKMAX);
+    stdex::mdspan<float, stdex::dextents<size_t, 3>> wrk2(wrk2_v.data(), MIMAX, MJMAX, MKMAX);
 
     /*
      *    Initializing matrixes
