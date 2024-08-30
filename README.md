@@ -47,4 +47,4 @@ nvc++ -DELARGE -std=c++23 --gcc-toolchain=<path/to/toolchain> -stdpar=gpu --expe
 ```
 
 - 468 GFLOPS on A100 80GB
-- 556 GFLOPS on A100 40GB
+- 411 GFLOPS on A100 40GB
